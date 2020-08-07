@@ -1,0 +1,12 @@
+[package]
+name = "simple"
+version = "0.1.0"
+authors = ["Jakub Konka <kubkon@golem.network>"]
+edition = "2018"
+
+[dependencies]
+anyhow = "1"
+bellman = "0.6"
+pairing = "0.16"
+ff = "0.6"
+rand = "0.7"
