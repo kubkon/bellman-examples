@@ -1,5 +1,5 @@
 [package]
-name = "simple"
+name = "tubular-bells"
 version = "0.1.0"
 authors = ["Jakub Konka <kubkon@golem.network>"]
 edition = "2018"

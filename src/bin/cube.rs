@@ -4,12 +4,13 @@ use bellman::{
     },
     Circuit, ConstraintSystem, SynthesisError,
 };
-use ff::{Field, PrimeField};
+use ff::Field;
 use pairing::{
     bls12_381::{Bls12, Fr},
     Engine,
 };
 use rand::rngs::OsRng;
+use tubular_bells::get_constant;
 
 pub struct CubeCircuit<E: Engine> {
     pub x: Option<E::Fr>,
@@ -78,16 +79,6 @@ impl<E: Engine> Circuit<E> for CubeCircuit<E> {
 
         Ok(())
     }
-}
-
-#[inline]
-fn get_constant<Fr: PrimeField>(scalar: u64) -> Fr {
-    let mut x = Fr::zero();
-    let one = Fr::one();
-    for _ in 0..scalar {
-        x.add_assign(&one);
-    }
-    x
 }
 
 fn main() -> anyhow::Result<()> {
