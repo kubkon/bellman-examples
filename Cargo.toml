@@ -6,8 +6,10 @@ edition = "2018"
 
 [dependencies]
 anyhow = "1"
+base64 = "0.12"
 bellman = "0.6"
 pairing = "0.16"
 ff = "0.6"
 rand = "0.7"
 sha2 = "0.9"
+structopt = "0.3"
