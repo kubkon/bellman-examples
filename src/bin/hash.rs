@@ -7,9 +7,10 @@ use bellman::{
     groth16, Circuit, ConstraintSystem, SynthesisError,
 };
 use pairing::{bls12_381::Bls12, Engine};
+use rand::rngs::OsRng;
 use std::{
-    fs::{self, OpenOptions},
-    path::PathBuf,
+    fs::{self, File, OpenOptions},
+    path::{Path, PathBuf},
 };
 use structopt::StructOpt;
 
@@ -81,91 +82,134 @@ impl<E: Engine> Circuit<E> for HashCircuit {
 
 #[derive(StructOpt)]
 enum Opt {
-    /// Generates verification key and proof.
-    Generate {
+    /// Generates public parameters.
+    GenerateParams,
+
+    /// Generates proof.
+    GenerateProof {
         #[structopt(parse(from_os_str))]
         preimage: PathBuf,
+
+        #[structopt(long, parse(from_os_str), default_value = "params")]
+        params: PathBuf,
     },
 
     /// Verifies the proof using the generated verification
     /// key.
-    Verify { hash: String },
+    VerifyProof {
+        hash: String,
+
+        #[structopt(long, parse(from_os_str), default_value = "proof")]
+        proof: PathBuf,
+
+        #[structopt(long, parse(from_os_str), default_value = "vk")]
+        vk: PathBuf,
+    },
+}
+
+fn generate_params() -> anyhow::Result<()> {
+    if let Ok(f) = File::open("params") {
+        if Path::new("vk").exists() {
+            return Ok(());
+        }
+
+        let params = groth16::Parameters::<Bls12>::read(f, true)?;
+        let f_vk = File::create("vk")?;
+        params.vk.write(f_vk)?;
+    }
+
+    println!("Generating parameters...");
+
+    let mut rng = OsRng;
+    let circuit = HashCircuit::default();
+    let params = groth16::generate_random_parameters::<Bls12, _, _>(circuit, &mut rng)?;
+
+    let f_params = File::create("params")?;
+    let f_vk = File::create("vk")?;
+    params.write(f_params)?;
+    params.vk.write(f_vk)?;
+
+    Ok(())
+}
+
+fn generate_proof<P1: AsRef<Path>, P2: AsRef<Path>>(
+    preimage: P1,
+    params: P2,
+) -> anyhow::Result<()> {
+    use sha2::{Digest, Sha256};
+
+    let f_params = File::open(params.as_ref())?;
+    let params = groth16::Parameters::<Bls12>::read(f_params, true)?;
+
+    println!("Creating proofs...");
+
+    let preimage = fs::read(preimage)?;
+    let mut preimage_truncated = [0u8; 80];
+    for (i, byte) in preimage.into_iter().enumerate() {
+        if i == 80 {
+            break;
+        }
+        preimage_truncated[i] = byte;
+    }
+    let circuit = HashCircuit::new(preimage_truncated);
+
+    println!("Creating groth16 proof with parameters...");
+
+    let mut rng = OsRng;
+    let proof = groth16::create_random_proof(circuit, &params, &mut rng)?;
+
+    let f_proof = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open("proof")?;
+    proof.write(f_proof)?;
+
+    println!(
+        "Digest: {}",
+        base64::encode(Sha256::digest(&preimage_truncated))
+    );
+
+    Ok(())
+}
+
+fn verify_proof<S: AsRef<str>, P1: AsRef<Path>, P2: AsRef<Path>>(
+    hash: S,
+    proof: P1,
+    vk: P2,
+) -> anyhow::Result<()> {
+    use sha2::{Digest, Sha256};
+
+    println!("Loading verification key and proof...");
+
+    let f_vk = File::open(vk)?;
+    let vk = groth16::VerifyingKey::<Bls12>::read(f_vk)?;
+
+    let f_proof = File::open(proof)?;
+    let proof = groth16::Proof::read(f_proof)?;
+
+    let pvk = groth16::prepare_verifying_key(&vk);
+
+    println!("Verifying proof...");
+
+    let hash = hash.as_ref();
+    let hash = base64::decode(&hash)?;
+    let hash = Sha256::digest(&hash);
+
+    let hash_bits = multipack::bytes_to_bits_le(&hash);
+    let inputs = multipack::compute_multipacking::<Bls12>(&hash_bits);
+    let verified = groth16::verify_proof(&pvk, &proof, &inputs)?;
+
+    println!("Proof successfully verified? {}", verified);
+
+    Ok(())
 }
 
 fn main() -> anyhow::Result<()> {
     let opt = Opt::from_args();
     match opt {
-        Opt::Generate { preimage } => {
-            use rand::rngs::OsRng;
-            use sha2::{Digest, Sha256};
-
-            let mut rng = OsRng;
-
-            println!("Creating parameters...");
-
-            let circuit = HashCircuit::default();
-            let params = groth16::generate_random_parameters::<Bls12, _, _>(circuit, &mut rng)?;
-
-            let f_key = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open("vk")?;
-            params.vk.write(f_key)?;
-
-            println!("Creating proofs...");
-
-            let preimage = fs::read(preimage)?;
-            let mut preimage_truncated = [0u8; 80];
-            for (i, byte) in preimage.into_iter().enumerate() {
-                if i == 80 {
-                    break;
-                }
-                preimage_truncated[i] = byte;
-            }
-            let circuit = HashCircuit::new(preimage_truncated);
-
-            println!("Creating groth16 proof with parameters...");
-
-            let proof = groth16::create_random_proof(circuit, &params, &mut rng)?;
-
-            let f_proof = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open("proof")?;
-            proof.write(f_proof)?;
-
-            println!(
-                "Digest: {}",
-                base64::encode(Sha256::digest(&preimage_truncated))
-            );
-        }
-        Opt::Verify { hash } => {
-            use sha2::{Digest, Sha256};
-
-            println!("Loading verification key and proof...");
-
-            let f_key = OpenOptions::new().read(true).open("vk")?;
-            let vk = groth16::VerifyingKey::<Bls12>::read(f_key)?;
-
-            let f_proof = OpenOptions::new().read(true).open("proof")?;
-            let proof = groth16::Proof::read(f_proof)?;
-
-            let pvk = groth16::prepare_verifying_key(&vk);
-
-            println!("Verifying proof...");
-
-            let hash = base64::decode(&hash)?;
-            let hash = Sha256::digest(&hash);
-
-            let hash_bits = multipack::bytes_to_bits_le(&hash);
-            let inputs = multipack::compute_multipacking::<Bls12>(&hash_bits);
-            let verified = groth16::verify_proof(&pvk, &proof, &inputs)?;
-
-            println!("Proof successfully verified? {}", verified);
-        }
+        Opt::GenerateParams => generate_params(),
+        Opt::GenerateProof { preimage, params } => generate_proof(preimage, params),
+        Opt::VerifyProof { hash, proof, vk } => verify_proof(hash, proof, vk),
     }
-
-    Ok(())
 }
